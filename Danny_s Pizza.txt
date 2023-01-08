@@ -1,0 +1,322 @@
+``````````````````````````````````````````````````````````````````` A. Pizza Metrics ```````````````````````````````````````````````````````````````````````
+
+SELECT PIZZA_ID, TOPPING_ID, TOPPING_NAME
+FROM PIZZA_TOPPINGS PT JOIN PIZZA_RECIPE PR 
+ON PR.TOPPING::INTEGER = PT.TOPPING_ID::INTEGER
+ORDER BY PIZZA_ID
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+--1. How many pizzas were ordered?
+
+SELECT DISTINCT order_id, pizza_id, order_time, exclude FROM customer_orders CO
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+--2. How many unique customer orders were made?
+SELECT COUNT(DISTINCT order_id) FROM customer_orders CO
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+--3. How many successful orders were delivered by each runner?
+SELECT runner_id, COUNT(*)
+FROM cust_order CO JOIN runner_orders RO USING(order_id)
+WHERE cancellation IS NULL
+GROUP BY runner_id ORDER BY runner_id
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+--4. How many of each type of pizza was delivered?
+SELECT COUNT(*) type_of_pizza FROM (
+SELECT pizza_id, extras, exclusions, COUNT(*)
+FROM cust_order CO 
+GROUP BY pizza_id, extras, exclusions 
+ORDER BY pizza_id) A
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+--5. How many Vegetarian and Meatlovers were ordered by each customer?
+SELECT pizza_id, COUNT(*)
+FROM cust_order CO
+GROUP BY pizza_id ORDER BY pizza_id
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+--6. What was the maximum number of pizzas delivered in a single order?
+SELECT order_id, COUNT(*) 
+FROM cust_order
+GROUP BY order_id
+HAVING COUNT(*) = (SELECT MAX(count) FROM (
+	SELECT order_id, COUNT(*) FROM cust_order
+	GROUP BY order_id) A)
+
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+--7. For each customer, how many delivered pizzas had at least 1 change and how many had no changes?
+WITH CTE AS (SELECT customer_id, variety, COUNT(*) FROM (
+SELECT customer_id,
+CASE WHEN EXTRAS IS NULL AND EXCLUSIONS IS NULL THEN 'No Variation' ELSE 'Variety Order' END AS variety
+FROM cust_order) A
+GROUP BY customer_id, variety
+ORDER BY customer_id)
+
+SELECT customer_id, MAX(No_Variation) No_Variation, MAX(Variety_Order) Variety_Order
+FROM (SELECT customer_id,
+CASE variety WHEN 'No Variation' THEN count ELSE '0' END AS No_Variation,
+CASE variety WHEN 'Variety Order' THEN count ELSE '0' END AS Variety_Order
+FROM CTE
+GROUP BY customer_id, variety, count) A
+GROUP BY customer_id
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+--8. How many pizzas were delivered that had both exclusions and extras?
+SELECT variety_count, COUNT(*) FROM (SELECT CASE 
+WHEN EXTRAS IS NOT NULL AND EXCLUSIONS IS NOT NULL THEN 'Both' ELSE 'Either/None' 
+END AS variety_count
+FROM cust_order JOIN runner_orders USING(order_id)
+WHERE cancellation IS NULL) A
+GROUP BY variety_count
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+--9. What was the total volume of pizzas ordered for each hour of the day?
+SELECT EXTRACT(HOUR FROM (order_time)) AS hour_of_day, COUNT(order_id)
+FROM cust_order
+GROUP BY hour_of_day
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+--10. What was the volume of orders for each day of the week?
+SELECT EXTRACT(WEEK FROM (order_time)) week,
+DATE(order_time), COUNT(*) no_of_pizzas
+FROM cust_order
+GROUP BY week, date ORDER BY week, date
+
+
+``````````````````````````````````````````````````````````` B. Runner and Customer Experience ``````````````````````````````````````````````````````````````
+
+--1. How many runners signed up for each 1 week period?
+SELECT week, COUNT(DISTINCT runner_id) FROM (
+SELECT runner_id, ('Week '||EXTRACT(WEEK FROM (pickup_time::DATE))) AS week
+FROM runner_orders
+WHERE cancellation IS NULL) A
+GROUP BY week
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+--2. What was the average time in minutes it took for each runner to arrive at the Pizza Runner HQ to pickup the order?
+SELECT runner_id, TRUNC(AVG(duration::INTEGER), 2) FROM runner_orders
+GROUP BY runner_id
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+--3. Is there any relationship between the number of pizzas and how long the order takes to prepare?
+WITH CTE AS (
+	SELECT order_id, 
+	EXTRACT(HOUR FROM pickup_time::TIME - order_time::TIME) AS hours,
+	EXTRACT(MINUTE FROM pickup_time::TIME - order_time::TIME) AS mins
+	FROM runner_orders JOIN cust_order USING(order_id)
+	WHERE cancellation IS NULL)
+
+SELECT order_id, COUNT(order_id) AS no_of_pizzas,
+CASE WHEN (SIGN(hours) = -1) THEN (60 + mins) ELSE mins END || ' mins' AS prep_time
+FROM CTE GROUP BY order_id, hours, mins ORDER BY order_id
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+--4. What was the average distance travelled for each customer?
+SELECT customer_id, SUM(distance::NUMERIC) AS dist FROM (
+SELECT DISTINCT customer_id, order_time, runner_id, distance
+FROM cust_order JOIN runner_orders USING(order_id)
+WHERE cancellation IS NULL ORDER BY customer_id) A
+GROUP BY customer_id
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+--5. What was the difference between the longest and shortest delivery times for all orders?
+SELECT MAX(duration::INTEGER) - MIN(duration::INTEGER) AS delivery_time
+FROM runner_orders
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+--6. What was the average speed for each runner for each delivery and do you notice any trend for these values?
+WITH CTE AS(
+SELECT order_id, runner_id, distance::NUMERIC, duration::NUMERIC
+FROM runner_orders WHERE cancellation IS NULL)
+
+SELECT order_id, runner_id, TRUNC((distance*60)/duration, 1) || ' kmph' AS avg_speed_per_order
+FROM CTE ORDER BY runner_id, order_id
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+--7. What is the successful delivery percentage for each runner?
+WITH CTE AS (SELECT order_id, runner_id,
+CASE WHEN cancellation IS NULL THEN 'Y' ELSE 'N' END AS cancel
+FROM runner_orders),
+
+CTE2 AS (SELECT runner_id, 
+SUM(CASE cancel WHEN 'Y' then 1 ELSE 0 END) AS success,
+SUM(CASE cancel WHEN 'N' then 1 ELSE 0 END) AS fail
+FROM CTE GROUP BY runner_id ORDER BY runner_id)
+
+SELECT runner_id, TRUNC(100.0*success/(success+fail), 2) AS success_perc
+FROM CTE2
+
+`````````````````````````````````````````````````````````````` C. Ingredient Optimisation ``````````````````````````````````````````````````````````````````
+
+
+--1. What are the standard ingredients for each pizza?
+WITH CTE AS (SELECT * FROM pizza_recipe
+			 WHERE pizza_id = 1),
+CTE2 AS (SELECT * FROM pizza_recipe
+		 WHERE pizza_id = 2)
+		 
+SELECT c1.topping, topping_name
+FROM CTE c1 JOIN CTE2 c2
+ON c1.topping::INTEGER = c2.topping::INTEGER
+JOIN pizza_toppings pt
+ON c1.topping::INTEGER = pt.topping_id::INTEGER
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+--2. What was the most commonly added extra?
+WITH CTE AS(
+SELECT DISTINCT order_id, extra, topping_name FROM 
+customer_orders CO JOIN pizza_toppings PT
+ON co.extra::INTEGER = pt.topping_id::INTEGER
+WHERE extra IS NOT NULL)
+
+SELECT extra, topping_name, COUNT(order_id) FROM CTE
+GROUP BY extra, topping_name
+ORDER BY COUNT DESC LIMIT 1
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+--3. What was the most common exclusion?
+WITH CTE AS(
+SELECT DISTINCT order_id, exclude, topping_name FROM 
+customer_orders CO JOIN pizza_toppings PT
+ON co.exclude::INTEGER = pt.topping_id::INTEGER
+WHERE exclude IS NOT NULL)
+
+SELECT exclude, topping_name, COUNT(order_id) FROM CTE
+GROUP BY exclude, topping_name
+ORDER BY COUNT DESC LIMIT 1
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+--4. Generate an order item for each record in the customers_orders table in the format of one of the following:
+-- Meat Lovers
+-- Meat Lovers - Exclude: Beef
+-- Meat Lovers - Extra: Bacon
+-- Meat Lovers - Exclude: Cheese, Bacon || Extra: Mushroom, Peppers
+
+WITH CTE AS (SELECT DISTINCT pn.pizza_id, pizza_name, topping, topping_name
+FROM pizza_names pn CROSS JOIN pizza_recipe pr
+JOIN pizza_toppings pt ON pr.topping::INTEGER = pt.topping_id::INTEGER
+WHERE pn.pizza_id = 1
+AND topping_name IN ('Beef', 'Bacon', 'Mushrooms', 'Cheese', 'Peppers')),
+
+ROW1 AS (SELECT '1' AS pizza_id, pizza_name, NULL AS exclusions, NULL AS extras 
+FROM CTE ORDER BY pizza_id LIMIT 1),
+
+ROW2 AS (SELECT '2' AS pizza_id, pizza_name, 
+CASE when topping_name = 'Beef' THEN topping END AS exclusions,
+NULL AS extras FROM CTE
+ORDER BY exclusions LIMIT 1),
+
+ROW3 AS (SELECT '3' AS pizza_id, pizza_name, NULL AS exclusions, 
+CASE when topping_name = 'Bacon' THEN topping END AS extras
+FROM CTE ORDER BY extras LIMIT 1),
+
+ROW4 AS (SELECT DISTINCT '4' AS pizza_id, pizza_name, 
+CASE when topping_name IN ('Cheese', 'Bacon') THEN topping END AS exclusions, 
+CASE when topping_name IN ('Mushrooms', 'Peppers') THEN topping END AS extras
+FROM CTE ORDER BY extras, exclusions LIMIT 4)
+	
+(SELECT * FROM ROW1) UNION ALL (SELECT * FROM ROW2) UNION ALL 
+(SELECT * FROM ROW3) UNION ALL (SELECT * FROM ROW4)
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+<<<< CREATE A VIEW OF QUES.4 >>>>
+--5. Generate an alphabetically ordered comma separated ingredient list for each pizza order from the customer_orders table and add a 2x in front of any relevant ingredients.
+
+WITH CTE AS (SELECT ov.*, p1.topping_name AS excl, p2.topping_name AS extr
+FROM order_view ov
+LEFT JOIN pizza_toppings p1 ON ov.exclusions::INTEGER = p1.topping_id::INTEGER
+LEFT JOIN pizza_toppings p2 ON ov.extras::INTEGER = p2.topping_id::INTEGER
+ORDER BY pizza_id),
+
+CTE2 AS (SELECT pizza_id, pizza_name, 
+array_to_string(ARRAY_AGG(exclusions), ', ') AS exclusions,
+array_to_string(ARRAY_AGG(extras), ', ') AS extras,
+array_to_string(ARRAY_AGG(excl), ', ') AS excluded_toppings,
+array_to_string(ARRAY_AGG(extr), ', ') AS extra_topping
+FROM CTE GROUP BY pizza_id, pizza_name
+ORDER BY pizza_id)
+
+SELECT DISTINCT CTE2.pizza_id AS order_id,
+pizza_name || ': ' AS full_order, topping_id, topping_name, exclusions, extras
+FROM CTE2 JOIN pizza_names pn USING(pizza_name)
+JOIN pizza_recipe pr ON pn.pizza_id = pr.pizza_id
+JOIN pizza_toppings pt ON pr.topping::INTEGER = pt.topping_id::INTEGER
+ORDER BY order_id
+
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+--6. What is the total quantity of each ingredient used in all delivered pizzas sorted by most frequent first?
+WITH CTE AS (
+SELECT pizza_id, COUNT(pizza_id) FROM 
+(SELECT order_id, pizza_id 
+FROM cust_order JOIN runner_orders USING(order_id)
+WHERE cancellation IS NULL) A
+GROUP BY pizza_id),
+
+CTE2 AS (SELECT pizza_id, topping::INTEGER, 
+ROW_NUMBER() OVER(PARTITION BY topping::INTEGER ORDER BY topping::INTEGER) RN
+FROM cust_order JOIN runner_orders USING(order_id)
+JOIN pizza_recipe USING(pizza_id)
+WHERE cancellation IS NULL
+GROUP BY topping::INTEGER, pizza_id),
+
+CTE3 AS (SELECT pizza_id, topping, rn, count FROM CTE JOIN CTE2 USING(pizza_id))
+
+SELECT topping, topping_name, SUM(rn*count) AS quantity
+FROM CTE3 JOIN pizza_toppings PT
+ON CTE3.topping = PT.topping_id::INTEGER
+GROUP BY topping, topping_name
+ORDER BY quantity DESC
+
+```````````````````````````````````````````````````````````````` D. Pricing and Ratings  ```````````````````````````````````````````````````````````````````
+
+--1. If a Meat Lovers pizza costs $12 and Vegetarian costs $10 and there were no charges for changes 
+--   how much money has Pizza Runner made so far if there are no delivery fees?
+
+SELECT pizza_id, pizza_name, 
+CASE WHEN pizza_id = 1 THEN '$' || count*12 
+ 	 ELSE '$' || count*10 END AS costs
+FROM (
+SELECT co.pizza_id, pizza_name, count(pizza_id) 
+FROM cust_order co JOIN runner_orders USING(order_id)
+JOIN pizza_names USING(pizza_id)
+WHERE cancellation IS NULL
+group by pizza_id, pizza_name) A
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+
+
+
+
+
+
+
+
+
+
+
